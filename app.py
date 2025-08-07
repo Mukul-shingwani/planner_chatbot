@@ -4,21 +4,47 @@ import streamlit as st
 import re
 import requests
 import pandas as pd
+import yaml
 
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 def build_prompt(user_query):
     return f"""
-    You are an e-commerce shopping assistant based out of middle east.
+    You are an e-commerce shopping assistant based out of middle east in noon.com, majority customers are middle class.
     
     Your job:
     1. Detect if the query is about "planning" (like planning a party, picnic, etc.) or "shopping" (explicit buy orders) or "cooking/recipe".
-    2. For planning queries, suggest a list of top 5 most relevant items, in order of relevance, that the user might want to buy online to fulfill the task. Be specific.
+    2. For planning queries
+        - Start with a warm, brief **introductory line** summarizing the user's plan, e.g. "Sounds like you're planning a fun beach day! Here’s a list of essentials you might want to shop for:" but not just limited to this.
+        - suggest a list of top 5 most relevant items, in order of relevance, that the user might want to buy online to fulfill the task. Be specific.
         - For example, instead of "return gifts", suggest things like "mini chocolates", "puzzle kits", "coloring books" etc.
         - Suggest items that make sense for the occasion and are typically bought online.
         - Only include **one specific item per search step**
-    3. For shopping queries, extract item name, quantity as search query and filters like brand, price, rating, etc.
+        - Donot apply unnecessary filters unless asked for 
+    3. If intent is **shopping**:
+    - Begin with a friendly confirmation, e.g.,  "Got it! You're looking to explore some great options for [product]. Here's a curated list of top brands you can check out:" but not just limited to this.
+    - Extract product/category name and optional filters like brand
+    - If user uses vague brand indicators like:
+        - "top brands", "luxury brands", "high-end" - Replace with **real premium brands actually found on Noon**.
+        - "budget", "cheap", "affordable" - Replace with **real budget-tier brands actually found on Noon**.
+    - NEVER hallucinate brands. Only include brands present on Noon.
+    - Format all brand names in lowercase and underscores (e.g., tommy_hilfiger).
+    - Return 7 most relevant brands when user asks for "top brands", "good brands" etc when exact brand names are provided to you use that only. If nothing around brands is mentioned donot apply.
+    - Donot apply unnecessary filters unless asked for by the user, and take decision depending on search query/category.
+    - Ensure the brands you are recommending are known and relevant as per the product category.
+    Tier Examples :
+        Luxury - YSL, Prada, Chanel, Gucci, Louis Vuitton
+        Premium - Michael Kors, Coach, Guess, Tommy Hilfiger
+        Mid-tier - Zara, Aldo, Nine West, Charles & Keith
+        Budget - Caprese, Styli, Generic, Parfois, Duniso
+
+    - STRICTLY enforce brand tier alignment:
+        - If user asks for **budget** brands, ONLY return **budget-tier** brands (low-cost, value-driven).
+        - If user asks for **top/luxury** brands, ONLY return **premium-tier** brands (high-end, designer, well-rated).
+        - Do NOT mix tiers in a single result list.
+
     4. For **cooking/recipe** queries:
+       - Begin with a natural suggestion, e.g.,  "Planning to cook butter chicken? Here's a quick list of items you’ll likely need and can easily order online:" but not just limited to this.
        - Identify the **top 5 essential ingredients or products** required for the recipe that a user can buy online.
        - Only suggest **non-perishable, e-commerce-friendly** items — i.e., things that are commonly sold online such as:
          - packaged spices (e.g., garam masala, turmeric, red chili powder)
@@ -30,57 +56,75 @@ def build_prompt(user_query):
        - Think like an online grocery expert. Suggest items a user would likely need but may not already have at home.
        - Only 1 item per search step.
        - Do not give cooking instructions. Only extract shoppable items.
+       - Donot apply unnecessary filters unless asked for 
 
     5. Output your answer in this format:
-    
+    <introductory message>
     intent: planning/shopping  
     search_steps:
     - {{q: "item1"}} or  
-    - {{q: "item2", filters: {{brand: "XYZ", max_price: "100"}}}}
+    - {{q: "item2", filters: {{brand: ["xyz","abc_123", "yyy", "z_rty", "pqrs", 'xd', 'yyu', '678', 'poi', 'lkj'], max_price: "100"}}}}
     
     Think like an e-commerce expert of middle east — only include things users can buy online, strictly relevant to ecommerce. Don’t mention services like booking a restaurant or sending invites.
-    
-    Examples:
-    
-    Input: "Help me plan a kids birthday party"
-    Output:
-    intent: planning
-    search_steps:
-    - {{q: "birthday balloons"}}
-    - {{q: "chocolate cake"}}
-    - {{q: "mini chocolates"}}
-    - {{q: "party snacks"}}
-    - {{q: "colorful paper plates"}}
-    
-    Input: "Buy 1kg sugar of MDH under 100 aed, and 2kg tur dal from same brand"
-    Output:
-    intent: shopping
-    search_steps:
-    - {{q: "1kg sugar", filters: {{brand: "MDH", max_price: "100"}}}}
-    - {{q: "2kg tur dal", filters: {{brand: "MDH"}}}}
+    Be creative and conversational while forming the introductory message.
     
     Input: {user_query}
     Output:
     """
 
+# Examples:
+    
+#     Input: "Help me plan a kids birthday party"
+#     Output:
+#     intent: planning
+#     search_steps:
+#     - {{q: "birthday balloons"}}
+#     - {{q: "chocolate cake"}}
+#     - {{q: "mini chocolates"}}
+#     - {{q: "party snacks"}}
+#     - {{q: "colorful paper plates"}}
+    
+#     Input: "Buy 1kg sugar of MDH under 100 aed, and 2kg tur dal from same brand"
+#     Output:
+#     intent: shopping
+#     search_steps:
+#     - {{q: "1kg sugar", filters: {{brand: "MDH", max_price: "100"}}}}
+#     - {{q: "2kg tur dal", filters: {{brand: "MDH"}}}}
 
 def get_search_plan(user_query):
     prompt = build_prompt(user_query)
     response = client.chat.completions.create(
         model="gpt-4.1",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=0.3
     )
+    # response = client.responses.create(
+    #                 model="gpt-4.1",
+    #                 tools=[{"type": "web_search_preview"}],
+    #                 input= prompt
+    #             )
     return response.choices[0].message.content.strip()
+    # response.output_text.strip()
 
+
+# def extract_queries(llm_text):
+#     pattern = r'q:\s*"(.*?)"'
+#     return re.findall(pattern, llm_text)
 
 def extract_queries(llm_text):
-    pattern = r'q:\s*"(.*?)"'
-    return re.findall(pattern, llm_text)
+    try:
+        parsed = yaml.safe_load(llm_text)
+        if not parsed or "search_steps" not in parsed:
+            return []
+        return parsed["search_steps"]
+    except yaml.YAMLError as e:
+        st.error("⚠️ Failed to parse LLM response as YAML.")
+        st.exception(e)
+        return []
 
 
 def show_product_carousel(df):
-    html = '<div style="display: flex; overflow-x: auto; padding: 10px;">'
+    html = '<div style="display: flex; overflow-x: auto; padding: 10px; width: 100%">'
     for _, row in df.iterrows():
         html += f'''
         <div style="flex: 0 0 auto; text-align: center; margin-right: 20px;">
@@ -95,6 +139,7 @@ def show_product_carousel(df):
         '''
     html += '</div>'
     return html  # Return string, not IPython HTML
+
 
 
 def fetch_top_products(query, country_code="AE", limit=2, sort_by="popularity", sort_dir="desc"):
@@ -180,7 +225,7 @@ def fetch_top_products(query, country_code="AE", limit=2, sort_by="popularity", 
         return pd.DataFrame()
 
 
-st.set_page_config(page_title="Noon Smart Shopping Assistant", layout="wide")
+st.set_page_config(page_title="noon Assistant", layout="wide")
 
 st.title("🛍️ noon Assistant")
 st.markdown("Enter your query — whether it's a **plan**, a **buying task**, or **recipe support**, and we’ll fetch the top picks!")
@@ -194,23 +239,31 @@ if st.button("Generate Search Plan & Show Products") and user_query:
         st.markdown("#### ✨ Detected Search Steps")
         st.code(result, language="yaml")
 
-    queries = extract_queries(result)
     results = []
-    
-    for i, q in enumerate(queries):
-        # st.markdown(f"### 🔍 Step {i+1}: Searching for `{q}`")
-        df_item = fetch_top_products(query=q)
-        
-        if df_item.empty:
-            st.warning(f"No results found for: `{q}`")
-        else:
-            # st.success(f"✅ Found {len(df_item)} items for: `{q}`")
-            # st.dataframe(df_item)  # Debug: show intermediate result
-            results.append(df_item)
+
+    with st.spinner("⏳ Hang on, getting the best recommendations for you..."):
+        for i, q_step in enumerate(queries):
+            q = q_step.get("q")
+            filters = q_step.get("filters", {})
+
+            if not q:
+                continue
+
+            if "brand" in filters:
+                for brand in filters["brand"]:
+                    brand_query = f"{q}/{brand}"
+                    df_item = fetch_top_products(query=brand_query)
+                    if not df_item.empty:
+                        results.append(df_item)
+            else:
+                df_item = fetch_top_products(query=q)
+                if not df_item.empty:
+                    results.append(df_item)
 
     if results:
         df = pd.concat(results, ignore_index=True)
         st.markdown("#### 🛒 Top Product Recommendations")
-        st.components.v1.html(show_product_carousel(df), height=400, scrolling=True)
+        html_carousel = show_product_carousel(df)
+        st.html(html_carousel)
     else:
         st.warning("No products found. Try refining your query.")
